@@ -1,0 +1,40 @@
+server {
+    listen        80;
+    server_name   _;
+
+    root          /usr/share/zabbix;
+    index         index.html index.htm index.php;
+
+    access_log    /var/log/nginx/zabbix-access.log main;
+    error_log     /var/log/nginx/zabbix-error.log;
+
+    client_max_body_size      5m;
+    client_body_buffer_size   128k;
+
+    error_page    404              /404.html;
+
+    error_page    500 502 503 504  /50x.html;
+    location = /50x.html {
+        root   /usr/share/nginx/html;
+    }
+
+    location ~ \.php$ {
+        try_files $uri =404;
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        fastcgi_pass    unix:/var/run/zabbix-fpm.sock;
+        fastcgi_index   index.php;
+        fastcgi_param   SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_buffers 16 16k;
+        fastcgi_buffer_size 32k;
+        include         fastcgi_params;
+    }
+
+    location ~*  \.(jpg|jpeg|png|gif|css|js|ico)$ {
+        expires         max;
+        log_not_found   off;
+    }
+
+    location ~ /\. {
+        deny    all;
+    }
+}

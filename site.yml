@@ -1,0 +1,145 @@
+---
+- name: Install fresh Zabbix 3 on CentOS 7 minimal, with MySQL support.
+  hosts: zabbix
+  remote_user: root
+  vars:
+    zabbixrepo: http://repo.zabbix.com/zabbix/3.0/rhel/7/x86_64/zabbix-release-3.0-1.el7.noarch.rpm
+    zbxdbhost: localhost
+    zbxdbname: zabbix
+    zbxdbuser: zabbix
+    zbxdbpass: zabbix
+    phpdatetimezone: Asia/Tbilisi
+
+  tasks:
+
+  - name: Install Ansible helpers
+    yum: name={{ item }} state=latest
+    with_items:
+      - MySQL-python
+      - libselinux-python
+  - name: Disable SELinux
+    selinux: state=disabled
+
+  - name: Install EPEL repo
+    yum: name=epel-release state=latest
+  - name: Install Rsyslog repo
+    copy: src=./files/rsyslog.repo dest=/etc/yum.repos.d/rsyslog.repo mode=644
+  - name: Install MariaDB repo
+    copy: src=./files/mariadb.repo dest=/etc/yum.repos.d/mariadb.repo mode=644
+  - name: Install Nginx repo
+    copy: src=./files/nginx.repo dest=/etc/yum.repos.d/nginx.repo mode=644
+  - name: Install Zabbix 3.0 repo
+    yum: name={{ zabbixrepo }} state=present
+  - name: Update system
+    yum: name=* state=latest
+    notify:
+      - Restart host
+      - Wait for host to restart
+
+  - name: Install MariaDB
+    yum: name={{ item }} state=latest
+    with_items:
+      - MariaDB-server
+      - MariaDB-compat
+      - MariaDB-common
+      - MariaDB-shared
+  - name: Start MariaDB service
+    service: name=mysql state=started enabled=yes
+  - name: Create zabbix database
+    mysql_db: login_user=root name={{ zbxdbname }} collation=utf8_bin encoding=utf8 state=present
+  - name: Create zabbix db user
+    mysql_user: login_user=root name={{ zbxdbuser }} password={{ zbxdbpass }} host=localhost priv={{ zbxdbname }}.*:ALL state=present
+
+  - name: Install Nginx
+    yum: name=nginx state=latest
+
+  - name: Install Zabbix required packages
+    yum: name={{ item }} state=latest
+    with_items:
+      - vim-enhanced
+      - curl
+      - wget
+      - libxml2
+      - libxslt
+      - OpenIPMI-libs
+      - OpenIPMI-modalias
+      - iksemel
+      - fping
+      - net-snmp
+      - net-snmp-libs
+      - libssh2
+      - libcurl
+      - perl-libwww-perl
+      - unixODBC
+  - name: Install PHP
+    yum: name={{ item }} state=latest
+    with_items:
+      - php-fpm
+      - php-cli
+      - php-common
+      - php-bcmath
+      - php-snmp
+      - php-gd
+      - php-mbstring
+      - php-mysql
+      - php-ldap
+      - php-pdo
+      - php-odbc
+      - php-xml
+      - php-imap
+      - php-mcrypt
+  - name: Add customPHP.ini
+    template: src=./templates/customphpini.j2 dest=/etc/php.d/custom.ini mode=644
+  - name: Remove default PHP-FPM pools
+    shell: rm -rf /etc/php-fpm.d/*
+  - name: Remove default Nginx virtualhosts
+    shell: rm -rf /etc/nginx/conf.d/*
+  - name: Add PHP-FPM pool for Zabbix
+    copy: src=./files/zabbix.fpm dest=/etc/php-fpm.d/zabbix.conf mode=644
+  - name: Add Nginx virtualhost for Zabbix
+    copy: src=./files/zabbix.nginx dest=/etc/nginx/conf.d/zabbix.conf mode=644
+
+  - name: Install Zabbix 3 packages
+    yum: name={{ item }} state=latest
+    with_items:
+      - zabbix-server-mysql
+      - zabbix-web-mysql
+      - zabbix-agent
+      - zabbix-java-gateway
+      - zabbix-sender
+      - zabbix-get
+  - name: Import Zabbix database
+    shell: zcat /usr/share/doc/zabbix-server-mysql-3.0.0/create.sql.gz | mysql -uroot zabbix
+  - name: Zabbix Server config
+    template: src=./templates/zabbix_server.conf.j2 dest=/etc/zabbix/zabbix_server.conf owner=root group=zabbix mode=640
+  - name: Zabbix Web config
+    template: src=./templates/zabbixconfphp.j2 dest=/etc/zabbix/web/zabbix.conf.php owner=apache group=apache mode=644
+
+  - name: Start PHP-FPM service
+    service: name=php-fpm state=started enabled=yes
+  - name: Start Nginx service
+    service: name=nginx state=started enabled=yes
+  - name: Start Zabbix-Server service
+    service: name=zabbix-server state=started enabled=yes
+  - name: Start Zabbix-Agent service
+    service: name=zabbix-agent state=started enabled=yes
+  - name: Start Zabbix-Java-Gateway service
+    service: name=zabbix-java-gateway state=started enabled=yes
+
+  handlers:
+    - name: Restart host
+      shell: sleep 2 && shutdown -r now "Reboot triggered by Ansible"
+      async: 10
+      poll: 0
+      ignore_errors: true
+
+    - name: Wait for host to restart
+      local_action:
+        wait_for
+        host={{ inventory_hostname }}
+        port={{ ansible_port | default(22) }}
+        state=started
+        delay=30
+        timeout=300
+        connect_timeout=15
+      become: false
